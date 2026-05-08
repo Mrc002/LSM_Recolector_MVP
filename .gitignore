@@ -1,0 +1,60 @@
+# ==========================================
+# 1. DATOS DEL PROYECTO (¡LO MÁS IMPORTANTE!)
+# ==========================================
+# Ignorar las bases de datos locales (SQLite)
+*.db
+*.sqlite3
+backend/dataset_lsm_v1.db
+
+# Ignorar los archivos físicos de recolección de IA
+# Aquí evitas que los archivos .npy saturen GitHub
+*.npy
+backend/dataset/
+backend/muestras/
+dataset_lsm/
+
+# ==========================================
+# 2. BACKEND (Python / FastAPI)
+# ==========================================
+# Entornos virtuales
+env/
+venv/
+.venv/
+env_*/
+
+# Archivos compilados de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ==========================================
+# 3. FRONTEND (React / Node.js)
+# ==========================================
+# Dependencias masivas (¡Nunca subir esto!)
+node_modules/
+
+# Logs de error
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos de producción (cuando compiles Vite)
+dist/
+dist-ssr/
+build/
+
+# ==========================================
+# 4. VARIABLES DE ENTORNO Y SEGURIDAD
+# ==========================================
+# Para cuando uses contraseñas reales de AWS/PostgreSQL
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# 5. ARCHIVOS DEL SISTEMA Y EDITORES (Basura)
+# ==========================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
