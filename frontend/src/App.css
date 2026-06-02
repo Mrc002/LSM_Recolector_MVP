@@ -1,3 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Color de fondo base para que toda la app respete el Dark Mode desde el inicio */
+body {
+  background-color: #0B1121;
+  color: #F9FAFB;
+}
+
 .counter {
   font-size: 16px;
   padding: 5px 10px;
@@ -182,3 +192,4 @@
     border-right-color: var(--border);
   }
 }
+
