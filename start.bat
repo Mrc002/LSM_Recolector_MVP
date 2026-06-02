@@ -1,20 +1,19 @@
 @echo off
-echo ==========================================
-echo 🚀 Iniciando Plataforma de Recolección LSM...
-echo ==========================================
+color 0B
+echo Iniciando MVP de Recoleccion LSM...
 
-echo 🐍 Levantando el Backend en el puerto 8000...
-:: Abre una nueva ventana para el backend (si usas un entorno virtual, agregalo antes del uvicorn)
-start "Backend FastAPI" cmd /k "cd backend && uvicorn main:app --reload --port 8000"
+:: Iniciar el Backend en una nueva ventana
+if exist main.py (
+    start "Servidor FastAPI (Backend)" cmd /k "uvicorn main:app --reload"
+) else if exist backend\main.py (
+    start "Servidor FastAPI (Backend)" cmd /k "cd backend && uvicorn main:app --reload"
+)
 
-echo ⚛️ Levantando el Frontend en el puerto 5173...
-:: Abre una nueva ventana para el frontend
-start "Frontend React" cmd /k "cd frontend && npm run dev"
+:: Iniciar el Frontend en una nueva ventana
+if exist package.json (
+    start "Servidor React (Frontend)" cmd /k "npm run dev"
+) else if exist frontend\package.json (
+    start "Servidor React (Frontend)" cmd /k "cd frontend && npm run dev"
+)
 
-echo.
-echo ✅ Todos los sistemas se estan abriendo en ventanas separadas.
-echo 👉 Frontend (Tu Interfaz): http://localhost:5173
-echo 👉 Backend (FastAPI API):  http://localhost:8000/docs
-echo ==========================================
-echo ⚠️ Para apagar los servidores, simplemente cierra las dos ventanas negras que se abrieron.
-echo ==========================================
+echo Servidores iniciados. Cierra las ventanas negras para apagar el sistema.
