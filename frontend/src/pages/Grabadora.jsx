@@ -17,10 +17,30 @@ export default function Grabadora () {
   const [consentimientoAceptado, setConsentimientoAceptado] = useState(false)
   const [consentimientoId, setConsentimientoId] = useState(null)
   const [guardandoConsentimiento, setGuardandoConsentimiento] = useState(false)
+  const [mostrarConsentimientoModal, setMostrarConsentimientoModal] = useState(true)
   const [mostrarModalConsentimiento, setMostrarModalConsentimiento] = useState(false)
   const [anguloHorizontal, setAnguloHorizontal] = useState("frontal")
   const [anguloVertical, setAnguloVertical] = useState("nivel_ojos")
   const [distancia, setDistancia] = useState("plano_medio")
+  const progresoVacio = {
+    total_donaciones: 0,
+    limite_total: 20,
+    faltan_total: 20,
+    porcentaje_total: 0,
+    caso_actual: 0,
+    limite_caso: 20,
+    faltan_caso: 20,
+    porcentaje_caso: 0,
+    casos: {
+      frontal: { actual: 0, limite: 5, faltan: 5, porcentaje: 0 },
+      lateral_der: { actual: 0, limite: 5, faltan: 5, porcentaje: 0 },
+      lateral_izq: { actual: 0, limite: 5, faltan: 5, porcentaje: 0 },
+      close_up: { actual: 0, limite: 5, faltan: 5, porcentaje: 0 },
+    },
+    bloqueado: false,
+  }
+
+  const [progresoUsuario, setProgresoUsuario] = useState(progresoVacio)
   
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
@@ -66,6 +86,29 @@ export default function Grabadora () {
   useEffect(() => {
     estadoGrabacionRef.current = estadoGrabacion
   }, [estadoGrabacion])
+
+  const fetchProgresoUsuario = async (usuario = correoParticipante.trim() || idUsuario.trim(), currentSena = senaSeleccionada) => {
+    const usuarioActivo = (usuario || '').trim()
+    if (!usuarioActivo || usuarioActivo.toLowerCase() === 'anonimo') {
+      setProgresoUsuario(progresoVacio)
+      return
+    }
+
+    const url = `http://localhost:8000/api/progreso-usuario/${encodeURIComponent(usuarioActivo)}${currentSena ? `?id_sena=${currentSena.id_sena}` : ''}`
+
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error('No se pudo cargar el progreso.')
+      const data = await res.json()
+      setProgresoUsuario(data)
+    } catch {
+      setProgresoUsuario(progresoVacio)
+    }
+  }
+
+  useEffect(() => {
+    fetchProgresoUsuario(correoParticipante.trim() || idUsuario.trim(), senaSeleccionada)
+  }, [idUsuario, correoParticipante, senaSeleccionada])
 
   const dibujarResultadosWorker = (payload) => {
     if (!canvasRef.current) return;
@@ -122,6 +165,7 @@ export default function Grabadora () {
       }
 
       if (fotogramasSinManosRef.current > 15 || fotogramasSinCaraRef.current > 15) {
+        grabacionAbortadaRef.current = true
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
           mediaRecorderRef.current.stop();
         }
@@ -237,6 +281,11 @@ export default function Grabadora () {
   }
 
   useEffect(() => {
+    if (mostrarConsentimientoModal || !consentimientoAceptado) {
+      detenerCamara()
+      return undefined
+    }
+
     let isCancelled = false
 
     const iniciarCamara = async () => {
@@ -246,10 +295,7 @@ export default function Grabadora () {
           return
         }
 
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((track) => track.stop())
-          streamRef.current = null
-        }
+        detenerCamara()
 
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 480, facingMode: 'user' },
@@ -277,16 +323,9 @@ export default function Grabadora () {
 
     return () => {
       isCancelled = true
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop())
-        streamRef.current = null
-      }
-      if (videoRef.current) {
-        videoRef.current.pause()
-        videoRef.current.srcObject = null
-      }
+      detenerCamara()
     }
-  }, [])
+  }, [mostrarConsentimientoModal, consentimientoAceptado])
 
   const registrarConsentimiento = async () => {
     if (!consentimientoAceptado) {
@@ -297,7 +336,7 @@ export default function Grabadora () {
     setGuardandoConsentimiento(true)
 
     const formData = new FormData()
-    formData.append("id_usuario", idUsuario.trim() || "anonimo")
+    formData.append("id_usuario", correoParticipante.trim() || idUsuario.trim() || "anonimo")
     formData.append("acepta_consentimiento", "true")
     formData.append("nombre_participante", nombreParticipante.trim())
     formData.append("correo", correoParticipante.trim())
@@ -315,6 +354,8 @@ export default function Grabadora () {
       }
 
       setConsentimientoId(payload.id_consentimiento)
+      setConsentimientoAceptado(true)
+      setMostrarConsentimientoModal(false)
       return payload.id_consentimiento
     } catch (error) {
       console.error('Consentimiento error:', error)
@@ -331,14 +372,29 @@ export default function Grabadora () {
       return
     }
 
-    if (!consentimientoAceptado) {
+    if (!consentimientoAceptado || mostrarConsentimientoModal) {
       alert("Debes aceptar el consentimiento informado antes de continuar.")
+      setMostrarConsentimientoModal(true)
+      return
+    }
+
+    if (progresoUsuario.bloqueado || progresoUsuario.total_donaciones >= progresoUsuario.limite_total) {
+      alert("Ya llegaste al límite de 20 donaciones por persona. No puedes registrar más muestras.")
+      return
+    }
+
+    const casoActual = anguloHorizontal === 'frontal' ? 'frontal' : anguloHorizontal === 'lateral_der' ? 'lateral_der' : anguloHorizontal === 'lateral_izq' ? 'lateral_izq' : 'close_up'
+    const casoLimitado = distancia === 'close_up' ? 'close_up' : casoActual
+    const casoInfo = progresoUsuario.casos?.[casoLimitado]
+    if (casoInfo && casoInfo.actual >= casoInfo.limite) {
+      alert(`Ya llegaste al límite de ${casoInfo.limite} donaciones para la pose ${casoLimitado === 'close_up' ? 'close-up' : casoLimitado.replace('_', ' ')}.`)
       return
     }
 
     const consentId = consentimientoId || await registrarConsentimiento()
     if (!consentId) return
 
+    grabacionAbortadaRef.current = false
     setEstadoGrabacion("cuenta_regresiva")
     setContador(3)
 
@@ -374,6 +430,12 @@ export default function Grabadora () {
 
       const videoBlob = new Blob(chunksVideoRef.current, { type: 'video/webm' })
       const vectoresJSON = vectoresRef.current
+      const consentimientoIdActual = consentimientoId ?? null
+
+      if (!consentimientoIdActual) {
+        alert('No se pudo guardar la muestra porque falta el consentimiento informado.')
+        return
+      }
       
       const formData = new FormData()
       formData.append("id_sena", senaSeleccionada.id_sena)
@@ -383,7 +445,7 @@ export default function Grabadora () {
 
       // --- INYECTAMOS LOS METADATOS AL FORMULARIO ---
       formData.append("id_usuario", idUsuario.trim() !== "" ? idUsuario.trim() : "anonimo")
-      formData.append("id_consentimiento", String(consentimientoId ?? consentId ?? ""))
+      formData.append("id_consentimiento", String(consentimientoIdActual))
       formData.append("angulo_horizontal", anguloHorizontal)
       formData.append("angulo_vertical", anguloVertical)
       formData.append("distancia", distancia)
@@ -398,6 +460,7 @@ export default function Grabadora () {
         if (response.ok) {
           const resultado = await response.json()
           console.log("💾 Guardado en disco duro:", resultado)
+          await fetchProgresoUsuario(correoParticipante.trim() || idUsuario.trim(), senaSeleccionada)
           alert("✅ ¡Seña guardada y catalogada exitosamente!")
         } else if (response.status === 403) {
           // Atrapamos el error antispam de FastAPI (Límite de 5 muestras)
@@ -426,21 +489,121 @@ export default function Grabadora () {
     setBusqueda("")
   }
 
+  const detenerCamara = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+
+    if (videoRef.current) {
+      videoRef.current.pause()
+      videoRef.current.srcObject = null
+    }
+  }
+
+  const finalizarSesion = () => {
+    setIdUsuario("")
+    setNombreParticipante("")
+    setCorreoParticipante("")
+    setConsentimientoAceptado(false)
+    setConsentimientoId(null)
+    setMostrarConsentimientoModal(true)
+    setMostrarModalConsentimiento(false)
+
+    detenerCamara()
+
+    if (estadoGrabacion !== 'inactivo') {
+      setEstadoGrabacion('inactivo')
+    }
+  }
+
   const getEmbedUrl = (url) => url ? url.replace("watch?v=", "embed/") : ""
 
   return (
     <div className="min-h-screen p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="max-w-[1800px] mx-auto">
-        
+        {mostrarConsentimientoModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4">
+            <div className="w-full max-w-2xl rounded-3xl border border-slate-700 bg-slate-900 p-6 shadow-2xl shadow-slate-950/70">
+              <div className="mb-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-400">Consentimiento informado</p>
+                <h2 className="mt-2 text-2xl font-bold text-white">Antes de continuar, confirma tu participación</h2>
+              </div>
+
+              <div className="space-y-4 text-sm leading-7 text-slate-200">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-200">Nombre completo</label>
+                  <input
+                    type="text"
+                    value={nombreParticipante}
+                    onChange={(e) => setNombreParticipante(e.target.value)}
+                    placeholder="Ej. Ana García López"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-200">Correo electrónico</label>
+                  <input
+                    type="email"
+                    value={correoParticipante}
+                    onChange={(e) => setCorreoParticipante(e.target.value)}
+                    placeholder="nombre@ejemplo.com"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-4">
+                  <label className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={consentimientoAceptado}
+                      onChange={(e) => setConsentimientoAceptado(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-400 accent-amber-500"
+                    />
+                    <span>
+                      Acepto participar en la recolección de video con rostro visible. Entiendo que este material se utilizará exclusivamente para investigación científica y desarrollo tecnológico de Lengua de Señas Mexicana (LSM). Autorizo la utilización de mi correo y mi imagen para la gestión de la investigación y la trazabilidad de cada muestra.
+                    </span>
+                  </label>
+                </div>
+
+                <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
+                  El correo será la clave de trazabilidad del participante. No se requiere un ID manual adicional.
+                </p>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={registrarConsentimiento}
+                  disabled={guardandoConsentimiento || !nombreParticipante.trim() || !correoParticipante.trim() || !consentimientoAceptado}
+                  className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                >
+                  {guardandoConsentimiento ? 'Guardando...' : 'Aceptar y continuar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ENCABEZADO */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-3xl mb-1 text-white font-bold">Estudio de Captura 3D</h1>
             <p className="text-sm text-slate-400">Sistema de grabación tridimensional MediaPipe</p>
           </div>
-          <Link to="/" className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700">
-            🏠 Volver al Inicio
-          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={finalizarSesion}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700"
+            >
+              🔒 Finalizar sesión
+            </button>
+            <Link to="/" className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700">
+              🏠 Volver al Inicio
+            </Link>
+          </div>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-6">
@@ -466,7 +629,7 @@ export default function Grabadora () {
                 )}
               </div>
 
-              <div className="p-6">
+              <div className="p-6 space-y-4">
                 <button
                   onClick={iniciarSecuenciaGrabacion}
                   disabled={estadoGrabacion !== "inactivo" || !senaSeleccionada}
@@ -490,6 +653,43 @@ export default function Grabadora () {
                     ⚠️ Busca y selecciona una seña en el panel derecho antes de grabar.
                   </p>
                 )}
+
+                <div className="rounded-2xl border border-slate-700 bg-slate-950/50 p-4">
+                  <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                    <span className="font-semibold text-white">{senaSeleccionada ? `Progreso de ${senaSeleccionada.nombre_sena}` : 'Progreso de la seña'}</span>
+                    <span className="text-emerald-300 font-bold">{progresoUsuario.caso_actual} / {progresoUsuario.limite_caso}</span>
+                  </div>
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-300"
+                      style={{ width: `${progresoUsuario.porcentaje_caso}%` }}
+                    />
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+                    <span>Faltan {progresoUsuario.faltan_caso} donaciones para esta seña</span>
+                    <span>{progresoUsuario.porcentaje_caso}%</span>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-slate-800 space-y-3">
+                    {Object.entries(progresoUsuario.casos || {}).map(([nombre, datos]) => {
+                      const label = nombre === 'close_up' ? 'Close-up' : nombre === 'lateral_der' ? 'Lateral der' : nombre === 'lateral_izq' ? 'Lateral izq' : 'Frontal'
+                      return (
+                        <div key={nombre}>
+                          <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-[0.12em] text-slate-300">
+                            <span>{label}</span>
+                            <span>{datos.actual} / {datos.limite}</span>
+                          </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-amber-500 to-orange-400 transition-all duration-300"
+                              style={{ width: `${datos.porcentaje}%` }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -551,17 +751,6 @@ export default function Grabadora () {
                   </h3>
                   
                   <div className="space-y-4 text-sm">
-                    <div>
-                      <label className="block text-slate-400 mb-1">ID del Voluntario</label>
-                      <input 
-                        type="text" 
-                        value={idUsuario}
-                        onChange={(e) => setIdUsuario(e.target.value)}
-                        placeholder="Ej. voluntario_01 (Deja en blanco si es anónimo)"
-                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-
                     <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
                       <label className="flex items-start gap-3 text-sm text-amber-100 cursor-pointer">
                         <input
@@ -593,13 +782,6 @@ export default function Grabadora () {
                                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-400">Consentimiento informado</p>
                                 <h3 className="mt-2 text-xl font-bold text-white">Ejemplo del documento</h3>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => setMostrarModalConsentimiento(false)}
-                                className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
-                              >
-                                Cerrar
-                              </button>
                             </div>
 
                             <div className="space-y-4 text-sm leading-7 text-slate-200">
