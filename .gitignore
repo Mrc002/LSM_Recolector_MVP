@@ -1,17 +1,28 @@
 # ==========================================
 # 1. DATOS DEL PROYECTO (¡LO MÁS IMPORTANTE!)
 # ==========================================
-# Ignorar las bases de datos locales (SQLite)
+# Ignorar bases de datos locales y artefactos legacy
 *.db
 *.sqlite3
+legacy/
+Legacy/
+**/Legacy/
 backend/dataset_lsm_v1.db
 
-# Ignorar los archivos físicos de recolección de IA
-# Aquí evitas que los archivos .npy saturen GitHub
+# Ignorar archivos físicos de recolección de IA
 *.npy
 backend/dataset/
 backend/muestras/
 dataset_lsm/
+backend/videos/
+
+# Ignorar outputs generados de la app
+frontend/dist/
+frontend/.vite/
+frontend/node_modules/
+backend/__pycache__/
+package-lock.json
+*.log
 
 # ==========================================
 # 2. BACKEND (Python / FastAPI)
@@ -32,6 +43,7 @@ __pycache__/
 # ==========================================
 # Dependencias masivas (¡Nunca subir esto!)
 node_modules/
+frontend/node_modules/
 
 # Logs de error
 npm-debug.log*
@@ -50,6 +62,7 @@ build/
 .env
 .env.*
 !.env.example
+backend/.env
 
 # ==========================================
 # 5. ARCHIVOS DEL SISTEMA Y EDITORES (Basura)

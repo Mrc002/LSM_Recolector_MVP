@@ -9,33 +9,29 @@ echo.
 
 :: 1. INSTALAR DEPENDENCIAS DE PYTHON (BACKEND)
 echo [1/2] Instalando dependencias del Backend (Python)...
-if exist main.py (
-    pip install fastapi uvicorn sqlalchemy python-multipart
-    echo Inicializando base de datos...
-    python poblar_db.py
+if exist backend\api\main.py (
+    cd /d "%~dp0backend"
+    pip install fastapi uvicorn sqlalchemy python-multipart python-dotenv psycopg2-binary httpx
+    cd /d "%~dp0"
 ) else if exist backend\main.py (
-    cd backend
-    pip install fastapi uvicorn sqlalchemy python-multipart
-    echo Inicializando base de datos...
-    python poblar_db.py
-    cd ..
+    cd /d "%~dp0backend"
+    pip install fastapi uvicorn sqlalchemy python-multipart python-dotenv psycopg2-binary httpx
+    cd /d "%~dp0"
 ) else (
-    echo [ADVERTENCIA] No se encontro main.py. Asegurate de estar en la carpeta correcta.
+    echo [ADVERTENCIA] No se encontro la app backend principal.
 )
 
 echo.
 :: 2. INSTALAR DEPENDENCIAS DE NODE (FRONTEND)
 echo [2/2] Instalando dependencias del Frontend (Node.js/React)...
-if exist package.json (
+if exist frontend\package.json (
+    cd /d "%~dp0frontend"
     npm install
-    npm install react-router-dom
-) else if exist frontend\package.json (
-    cd frontend
+    cd /d "%~dp0"
+) else if exist package.json (
     npm install
-    npm install react-router-dom
-    cd ..
 ) else (
-    echo [ADVERTENCIA] No se encontro package.json.
+    echo [ADVERTENCIA] No se encontro package.json del frontend.
 )
 
 echo.
@@ -43,4 +39,5 @@ echo ========================================================
 echo    ¡INSTALACION COMPLETADA CON EXITO!
 echo ========================================================
 echo Ya puedes ejecutar el sistema usando el archivo start.bat
+echo.
 pause
