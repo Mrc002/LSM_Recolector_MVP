@@ -18,6 +18,8 @@ export default function Grabadora () {
   
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
+  const workerRef = useRef(null)
+  const rafRef = useRef(null)
   
   // --- REFERENCIAS PARA GUARDAR LOS DATOS ---
   const mediaRecorderRef = useRef(null)
@@ -28,6 +30,9 @@ export default function Grabadora () {
   const fotogramasSinManosRef = useRef(0)
   const fotogramasSinCaraRef = useRef(0)
   const grabacionAbortadaRef = useRef(false)
+
+  const [modeloListo, setModeloListo] = useState(false)
+  const [calidadAceptable, setCalidadAceptable] = useState(false)
 
   useEffect(() => {
     fetch('http://localhost:8000/api/senas')
@@ -54,74 +59,55 @@ export default function Grabadora () {
     estadoGrabacionRef.current = estadoGrabacion
   }, [estadoGrabacion])
 
-  useEffect(() => {
-    if (!window.Holistic || !window.Camera) return;
-
-    const holistic = new window.Holistic({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`
-    })
-
-    // Apagamos la segmentación para ganar muchísimos FPS
-    holistic.setOptions({
-      modelComplexity: 0,
-      smoothLandmarks: true,
-      enableSegmentation: false, 
-      refineFaceLandmarks: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    })
-
-    holistic.onResults(onResults)
-
-    if (typeof videoRef.current !== 'undefined' && videoRef.current !== null) {
-      const camera = new window.Camera(videoRef.current, {
-        onFrame: async () => {
-          await holistic.send({ image: videoRef.current })
-        },
-        width: 640,
-        height: 480
-      })
-      camera.start().then(() => {
-        streamRef.current = videoRef.current.srcObject
-      })
-    }
-  }, [])
-
-  const onResults = (results) => {
+  const dibujarResultadosWorker = (payload) => {
     if (!canvasRef.current) return;
-    const canvasCtx = canvasRef.current.getContext('2d');
 
+    const canvasCtx = canvasRef.current.getContext('2d');
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-    if (results.faceLandmarks) {
-      window.drawConnectors(canvasCtx, results.faceLandmarks, window.FACEMESH_TESSELATION, {
-        color: '#10B981',
-        lineWidth: 0.5,
-        strokeStyle: 'rgba(16, 185, 129, 0.2)'
+    const dibujarLandmarks = (landmarks, connections, color, lineWidth = 2) => {
+      if (!landmarks || !landmarks.length || !window.drawConnectors) return;
+      const puntos = landmarks.map((point) => ({ x: point.x, y: point.y, z: point.z }));
+      window.drawConnectors(canvasCtx, puntos, connections, {
+        color,
+        lineWidth,
+        strokeStyle: color
       });
+    };
+
+    if (payload.face?.length) {
+      dibujarLandmarks(payload.face, window.FACEMESH_TESSELATION, '#10B981', 0.5);
     }
 
-    if (results.poseLandmarks) {
-      window.drawConnectors(canvasCtx, results.poseLandmarks, window.POSE_CONNECTIONS, { color: '#F9FAFB', lineWidth: 2 });
+    if (payload.pose?.length) {
+      dibujarLandmarks(payload.pose, window.POSE_CONNECTIONS, '#F9FAFB', 2);
     }
 
-    if (results.leftHandLandmarks) {
-      window.drawConnectors(canvasCtx, results.leftHandLandmarks, window.HAND_CONNECTIONS, { color: '#10B981', lineWidth: 3 });
+    if (payload.leftHand?.length) {
+      dibujarLandmarks(payload.leftHand, window.HAND_CONNECTIONS, '#10B981', 3);
     }
-    if (results.rightHandLandmarks) {
-      window.drawConnectors(canvasCtx, results.rightHandLandmarks, window.HAND_CONNECTIONS, { color: '#10B981', lineWidth: 3 });
+
+    if (payload.rightHand?.length) {
+      dibujarLandmarks(payload.rightHand, window.HAND_CONNECTIONS, '#10B981', 3);
     }
+
     canvasCtx.restore();
 
+    const validation = payload.validation || { valido: true };
+    setCalidadAceptable(validation.valido);
+
     if (estadoGrabacionRef.current === "grabando") {
-      if (!results.leftHandLandmarks && !results.rightHandLandmarks) {
+      const manosPresentes = !!payload.leftHand?.length || !!payload.rightHand?.length;
+      const caraPresente = !!payload.face?.length;
+
+      if (!manosPresentes) {
         fotogramasSinManosRef.current += 1;
       } else {
         fotogramasSinManosRef.current = 0;
       }
 
-      if (!results.faceLandmarks) {
+      if (!caraPresente) {
         fotogramasSinCaraRef.current += 1;
       } else {
         fotogramasSinCaraRef.current = 0;
@@ -133,6 +119,7 @@ export default function Grabadora () {
         }
 
         estadoGrabacionRef.current = "inactivo";
+        setEstadoGrabacion("inactivo");
         alert("⚠️ ¡Grabación cancelada! Te saliste del encuadre. Por favor, mantén tu rostro y manos visibles en la cámara.");
 
         fotogramasSinManosRef.current = 0;
@@ -143,13 +130,97 @@ export default function Grabadora () {
       }
 
       vectoresRef.current.push({
-        rostro: results.faceLandmarks || [],
-        cuerpo: results.poseLandmarks || [],
-        mano_izq: results.leftHandLandmarks || [],
-        mano_der: results.rightHandLandmarks || []
+        rostro: payload.face || [],
+        cuerpo: payload.pose || [],
+        mano_izq: payload.leftHand || [],
+        mano_der: payload.rightHand || []
       });
     }
   }
+
+  useEffect(() => {
+    workerRef.current = new Worker(
+      new URL('../workers/holisticWorker.js', import.meta.url),
+      { type: 'module' }
+    )
+
+    workerRef.current.onmessage = (event) => {
+      const { type, payload } = event.data
+
+      if (type === 'READY') {
+        setModeloListo(true)
+        return
+      }
+
+      if (type === 'RESULTS') {
+        dibujarResultadosWorker(payload)
+        return
+      }
+
+      if (type === 'ERROR') {
+        console.error('Worker error:', payload?.message || 'Error desconocido')
+      }
+    }
+
+    workerRef.current.postMessage({ type: 'INIT' })
+
+    return () => {
+      if (workerRef.current) workerRef.current.terminate()
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+      }
+    }
+  }, [])
+
+  const enviarFrameAlWorker = async () => {
+    const video = videoRef.current
+    if (!video || !workerRef.current) {
+      rafRef.current = requestAnimationFrame(enviarFrameAlWorker)
+      return
+    }
+
+    if (video.readyState >= 2) {
+      try {
+        const bitmap = await createImageBitmap(video)
+        workerRef.current.postMessage(
+          { type: 'PROCESS_FRAME', payload: bitmap },
+          [bitmap]
+        )
+      } catch (err) {
+        console.warn('No se pudo enviar frame al worker:', err)
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(enviarFrameAlWorker)
+  }
+
+  useEffect(() => {
+    const iniciarCamara = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          console.error('getUserMedia no disponible en este navegador.')
+          return
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480, facingMode: 'user' },
+          audio: false
+        })
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play()
+          streamRef.current = stream
+          enviarFrameAlWorker()
+        }
+      } catch (error) {
+        console.error('Error al iniciar la cámara:', error)
+      }
+    }
+
+    iniciarCamara()
+  }, [])
 
   const iniciarSecuenciaGrabacion = () => {
     if (!senaSeleccionada) {
