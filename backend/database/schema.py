@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime  # type: ignore[reportMissingImports]
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Boolean, Text  # type: ignore[reportMissingImports]
 # Importamos el tipo UUID nativo de PostgreSQL (con fallback a string)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID  # type: ignore[reportMissingImports]
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore[reportMissingImports]
@@ -34,12 +34,26 @@ class Usuario(Base):
     id_usuario = Column(PG_UUID(as_uuid=True), primary_key=True)
     fecha_registro = Column(DateTime, default=datetime.utcnow)
     muestras = relationship("Muestra", back_populates="usuario")
+    consentimientos = relationship("ConsentimientoInformado", back_populates="usuario")
+
+class ConsentimientoInformado(Base):
+    __tablename__ = 'consentimientos'
+    id_consentimiento = Column(Integer, primary_key=True, autoincrement=True)
+    id_usuario = Column(PG_UUID(as_uuid=True), ForeignKey('usuarios.id_usuario'), nullable=True)
+    nombre_participante = Column(String(255), nullable=True)
+    correo = Column(String(255), nullable=True)
+    acepta_consentimiento = Column(Boolean, nullable=False, default=False)
+    version_documento = Column(String(50), nullable=False, default='v1')
+    fecha_consentimiento = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    usuario = relationship("Usuario", back_populates="consentimientos")
 
 class Muestra(Base):
     __tablename__ = 'muestras'
     id_muestra = Column(Integer, primary_key=True, autoincrement=True)
     id_sena = Column(Integer, ForeignKey('senas.id_sena'))
     id_usuario = Column(PG_UUID(as_uuid=True), ForeignKey('usuarios.id_usuario'), nullable=True)
+    id_consentimiento = Column(Integer, ForeignKey('consentimientos.id_consentimiento'), nullable=True)
     
     ruta_video = Column(String(255), nullable=False) 
     ruta_archivo = Column(String(255), nullable=True) 
@@ -52,3 +66,4 @@ class Muestra(Base):
 
     sena = relationship("Sena", back_populates="muestras")
     usuario = relationship("Usuario", back_populates="muestras")
+    consentimiento = relationship("ConsentimientoInformado")

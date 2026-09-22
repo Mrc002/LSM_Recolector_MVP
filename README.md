@@ -90,7 +90,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Si la dependencia no tiene un `requirements.txt`, se puede instalar manualmente según el entorno local usado para FastAPI, SQLAlchemy y psycopg2.
@@ -100,7 +100,7 @@ Si la dependencia no tiene un `requirements.txt`, se puede instalar manualmente 
 ```powershell
 cd frontend
 npm install
-npm run dev -- --host 0.0.0.0
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 ### 3) Ejecutar scripts del proyecto

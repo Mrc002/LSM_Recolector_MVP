@@ -9,7 +9,7 @@ from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.schema import SessionLocal, Sena, Usuario, Muestra, Base, engine
+from database.schema import SessionLocal, Sena, Usuario, Muestra, Base, ConsentimientoInformado, engine
 import storage_manager
 
 app = FastAPI()
@@ -123,6 +123,44 @@ def obtener_expediente_sena(id_sena: int, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/api/consentimiento")
+def registrar_consentimiento(
+    id_usuario: str = Form(...),
+    acepta_consentimiento: bool = Form(...),
+    nombre_participante: str | None = Form(None),
+    correo: str | None = Form(None),
+    version_documento: str = Form("v1"),
+    db: Session = Depends(get_db),
+):
+    if not acepta_consentimiento:
+        raise HTTPException(status_code=400, detail="Se requiere aceptar el consentimiento informado antes de recolectar datos biométricos.")
+
+    usuario_normalizado = normalizar_id_usuario(id_usuario)
+    if usuario_normalizado:
+        usuario_existe = db.query(Usuario).filter(Usuario.id_usuario == usuario_normalizado).first()
+        if not usuario_existe:
+            db.add(Usuario(id_usuario=usuario_normalizado, fecha_registro=datetime.utcnow()))
+            db.commit()
+
+    consentimiento = ConsentimientoInformado(
+        id_usuario=usuario_normalizado,
+        nombre_participante=nombre_participante.strip() if nombre_participante else None,
+        correo=correo.strip() if correo else None,
+        acepta_consentimiento=True,
+        version_documento=version_documento,
+        fecha_consentimiento=datetime.utcnow(),
+    )
+    db.add(consentimiento)
+    db.commit()
+    db.refresh(consentimiento)
+
+    return {
+        "mensaje": "Consentimiento registrado correctamente.",
+        "id_consentimiento": consentimiento.id_consentimiento,
+        "acepta_consentimiento": True,
+    }
+
+
 @app.post("/api/muestras", status_code=201)
 async def procesar_muestra(
     id_sena: int = Form(...),
@@ -131,6 +169,7 @@ async def procesar_muestra(
     angulo_vertical: str = Form("nivel_ojos"),
     distancia: str = Form("plano_medio"),
     id_usuario: str = Form("anonimo"),
+    id_consentimiento: int | None = Form(None),
     db: Session = Depends(get_db),
 ):
     usuario_normalizado = normalizar_id_usuario(id_usuario)
@@ -138,6 +177,16 @@ async def procesar_muestra(
     sena_db = db.query(Sena).filter(Sena.id_sena == id_sena).first()
     if not sena_db:
         raise HTTPException(status_code=404, detail="La seña no existe")
+
+    if id_consentimiento is None:
+        raise HTTPException(status_code=403, detail="Se requiere un consentimiento informado registrado antes de capturar video.")
+
+    consentimiento = db.query(ConsentimientoInformado).filter(ConsentimientoInformado.id_consentimiento == id_consentimiento).first()
+    if not consentimiento or not consentimiento.acepta_consentimiento:
+        raise HTTPException(status_code=403, detail="El consentimiento informado no es válido o no fue autorizado.")
+
+    if usuario_normalizado and consentimiento.id_usuario and consentimiento.id_usuario != usuario_normalizado:
+        raise HTTPException(status_code=403, detail="El consentimiento no coincide con el usuario que intenta registrar la muestra.")
 
     if usuario_normalizado:
         donaciones_previas = db.query(Muestra).filter(
@@ -167,6 +216,7 @@ async def procesar_muestra(
         nueva_muestra = Muestra(
             id_sena=id_sena,
             id_usuario=usuario_normalizado,
+            id_consentimiento=id_consentimiento,
             ruta_video=ruta_video,
             ruta_archivo=None,
             angulo_horizontal=angulo_horizontal,
@@ -183,6 +233,7 @@ async def procesar_muestra(
         return {
             "mensaje": "¡Video guardado con éxito!",
             "id_registro_db": nueva_muestra.id_muestra,
+            "id_consentimiento": nueva_muestra.id_consentimiento,
             "archivo": nombre_video,
         }
 

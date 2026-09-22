@@ -1,8 +1,10 @@
-import '@mediapipe/holistic';
-
 let detector = null;
 let lastProcessTs = 0;
+let isInitializing = false;
+let initAttempts = 0;
 const minFrameIntervalMs = 40;
+const maxInitAttempts = 3;
+const holisticUrl = 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js';
 
 const normalizeLandmarks = (landmarks = []) =>
   landmarks.map((point) => ({
@@ -27,16 +29,27 @@ const validationFromResults = (results) => {
   };
 };
 
-self.onmessage = async (e) => {
-  const { type, payload } = e.data;
+const loadHolisticLibrary = () => {
+  if (self.Holistic) return true;
 
-  if (type === 'INIT') {
-    if (!self.Holistic) {
-      self.postMessage({
-        type: 'ERROR',
-        payload: { message: 'Holistic no está disponible en el worker.' },
-      });
-      return;
+  try {
+    self.importScripts(holisticUrl);
+    return !!self.Holistic;
+  } catch (error) {
+    console.error('Holistic worker load failed:', error);
+    return false;
+  }
+};
+
+const initializeDetector = async () => {
+  if (detector) return detector;
+  if (isInitializing) return null;
+
+  isInitializing = true;
+
+  try {
+    if (!loadHolisticLibrary()) {
+      throw new Error('Holistic no está disponible en el worker.');
     }
 
     detector = new self.Holistic({
@@ -66,7 +79,50 @@ self.onmessage = async (e) => {
     });
 
     await detector.initialize();
-    self.postMessage({ type: 'READY' });
+    return detector;
+  } catch (error) {
+    detector = null;
+    throw error;
+  } finally {
+    isInitializing = false;
+  }
+};
+
+self.onmessage = async (e) => {
+  const { type, payload } = e.data;
+
+  if (type === 'INIT') {
+    try {
+      await initializeDetector();
+      self.postMessage({ type: 'READY' });
+    } catch (error) {
+      initAttempts += 1;
+      const message = error?.message || 'Error inicializando Holistic';
+
+      self.postMessage({
+        type: 'ERROR',
+        payload: { message },
+      });
+
+      if (initAttempts < maxInitAttempts) {
+        self.setTimeout(() => {
+          self.postMessage({ type: 'RETRY_INIT' });
+        }, 1000);
+      }
+    }
+    return;
+  }
+
+  if (type === 'RETRY_INIT') {
+    try {
+      await initializeDetector();
+      self.postMessage({ type: 'READY' });
+    } catch (error) {
+      self.postMessage({
+        type: 'ERROR',
+        payload: { message: error?.message || 'Reintento fallido de Holistic' },
+      });
+    }
     return;
   }
 

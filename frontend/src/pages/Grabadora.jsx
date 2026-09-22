@@ -12,14 +12,22 @@ export default function Grabadora () {
   
   // --- NUEVOS ESTADOS PARA METADATOS (DASHBOARD) ---
   const [idUsuario, setIdUsuario] = useState("")
+  const [nombreParticipante, setNombreParticipante] = useState("")
+  const [correoParticipante, setCorreoParticipante] = useState("")
+  const [consentimientoAceptado, setConsentimientoAceptado] = useState(false)
+  const [consentimientoId, setConsentimientoId] = useState(null)
+  const [guardandoConsentimiento, setGuardandoConsentimiento] = useState(false)
+  const [mostrarModalConsentimiento, setMostrarModalConsentimiento] = useState(false)
   const [anguloHorizontal, setAnguloHorizontal] = useState("frontal")
   const [anguloVertical, setAnguloVertical] = useState("nivel_ojos")
   const [distancia, setDistancia] = useState("plano_medio")
   
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
-  const workerRef = useRef(null)
+  const holisticRef = useRef(null)
   const rafRef = useRef(null)
+  const initHolisticRef = useRef(false)
+  const initCamaraRef = useRef(false)
   
   // --- REFERENCIAS PARA GUARDAR LOS DATOS ---
   const mediaRecorderRef = useRef(null)
@@ -139,33 +147,68 @@ export default function Grabadora () {
   }
 
   useEffect(() => {
-    workerRef.current = new Worker(
-      new URL('../workers/holisticWorker.js', import.meta.url),
-      { type: 'module' }
-    )
+    let isMounted = true
 
-    workerRef.current.onmessage = (event) => {
-      const { type, payload } = event.data
+    if (initHolisticRef.current) return () => {
+      isMounted = false
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+      }
+    }
+    initHolisticRef.current = true
 
-      if (type === 'READY') {
+    const initHolistic = async () => {
+      try {
+        const HolisticCtor = window.Holistic
+
+        if (!HolisticCtor) {
+          throw new Error('Holistic no está disponible en window.Holistic.')
+        }
+
+        const holistic = new HolisticCtor({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
+        })
+
+        holistic.setOptions({
+          modelComplexity: 0,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          refineFaceLandmarks: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        })
+
+        holistic.onResults((results) => {
+          if (!isMounted) return
+          dibujarResultadosWorker({
+            face: results.faceLandmarks || [],
+            pose: results.poseLandmarks || [],
+            leftHand: results.leftHandLandmarks || [],
+            rightHand: results.rightHandLandmarks || [],
+            validation: {
+              valido: !!(results.faceLandmarks || results.poseLandmarks || results.leftHandLandmarks || results.rightHandLandmarks),
+              face: !!results.faceLandmarks,
+              pose: !!results.poseLandmarks,
+              hands: !!(results.leftHandLandmarks || results.rightHandLandmarks),
+            },
+          })
+        })
+
+        await holistic.initialize()
+
+        if (!isMounted) return
+        holisticRef.current = holistic
         setModeloListo(true)
-        return
-      }
-
-      if (type === 'RESULTS') {
-        dibujarResultadosWorker(payload)
-        return
-      }
-
-      if (type === 'ERROR') {
-        console.error('Worker error:', payload?.message || 'Error desconocido')
+      } catch (error) {
+        console.error('Error inicializando Holistic:', error)
       }
     }
 
-    workerRef.current.postMessage({ type: 'INIT' })
+    initHolistic()
 
     return () => {
-      if (workerRef.current) workerRef.current.terminate()
+      isMounted = false
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
@@ -175,20 +218,18 @@ export default function Grabadora () {
 
   const enviarFrameAlWorker = async () => {
     const video = videoRef.current
-    if (!video || !workerRef.current) {
+    const holistic = holisticRef.current
+
+    if (!video || !holistic) {
       rafRef.current = requestAnimationFrame(enviarFrameAlWorker)
       return
     }
 
     if (video.readyState >= 2) {
       try {
-        const bitmap = await createImageBitmap(video)
-        workerRef.current.postMessage(
-          { type: 'PROCESS_FRAME', payload: bitmap },
-          [bitmap]
-        )
+        await holistic.send({ image: video })
       } catch (err) {
-        console.warn('No se pudo enviar frame al worker:', err)
+        console.warn('No se pudo enviar frame a Holistic:', err)
       }
     }
 
@@ -196,6 +237,8 @@ export default function Grabadora () {
   }
 
   useEffect(() => {
+    let isCancelled = false
+
     const iniciarCamara = async () => {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -203,15 +246,26 @@ export default function Grabadora () {
           return
         }
 
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop())
+          streamRef.current = null
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 480, facingMode: 'user' },
-          audio: false
+          audio: false,
         })
+
+        if (isCancelled) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+
+        streamRef.current = stream
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream
-          await videoRef.current.play()
-          streamRef.current = stream
+          await videoRef.current.play().catch(() => {})
           enviarFrameAlWorker()
         }
       } catch (error) {
@@ -220,13 +274,70 @@ export default function Grabadora () {
     }
 
     iniciarCamara()
+
+    return () => {
+      isCancelled = true
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+      }
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.srcObject = null
+      }
+    }
   }, [])
 
-  const iniciarSecuenciaGrabacion = () => {
+  const registrarConsentimiento = async () => {
+    if (!consentimientoAceptado) {
+      alert("Debes aceptar el consentimiento informado antes de grabar video con rostro visible.")
+      return null
+    }
+
+    setGuardandoConsentimiento(true)
+
+    const formData = new FormData()
+    formData.append("id_usuario", idUsuario.trim() || "anonimo")
+    formData.append("acepta_consentimiento", "true")
+    formData.append("nombre_participante", nombreParticipante.trim())
+    formData.append("correo", correoParticipante.trim())
+    formData.append("version_documento", "v1")
+
+    try {
+      const response = await fetch('http://localhost:8000/api/consentimiento', {
+        method: 'POST',
+        body: formData
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload.detail || 'No se pudo registrar el consentimiento informado.')
+      }
+
+      setConsentimientoId(payload.id_consentimiento)
+      return payload.id_consentimiento
+    } catch (error) {
+      console.error('Consentimiento error:', error)
+      alert(error.message || 'No se pudo guardar el consentimiento informado.')
+      return null
+    } finally {
+      setGuardandoConsentimiento(false)
+    }
+  }
+
+  const iniciarSecuenciaGrabacion = async () => {
     if (!senaSeleccionada) {
       alert("Por favor selecciona una seña primero.")
       return
     }
+
+    if (!consentimientoAceptado) {
+      alert("Debes aceptar el consentimiento informado antes de continuar.")
+      return
+    }
+
+    const consentId = consentimientoId || await registrarConsentimiento()
+    if (!consentId) return
 
     setEstadoGrabacion("cuenta_regresiva")
     setContador(3)
@@ -238,12 +349,12 @@ export default function Grabadora () {
 
       if (cuenta === 0) {
         clearInterval(intervalo)
-        comenzarAGrabar()
+        comenzarAGrabar(consentId)
       }
     }, 1000)
   }
 
-  const comenzarAGrabar = () => {
+  const comenzarAGrabar = (consentId) => {
     setEstadoGrabacion("grabando")
     vectoresRef.current = [] 
     chunksVideoRef.current = [] 
@@ -272,6 +383,7 @@ export default function Grabadora () {
 
       // --- INYECTAMOS LOS METADATOS AL FORMULARIO ---
       formData.append("id_usuario", idUsuario.trim() !== "" ? idUsuario.trim() : "anonimo")
+      formData.append("id_consentimiento", String(consentimientoId ?? consentId ?? ""))
       formData.append("angulo_horizontal", anguloHorizontal)
       formData.append("angulo_vertical", anguloVertical)
       formData.append("distancia", distancia)
@@ -450,13 +562,99 @@ export default function Grabadora () {
                       />
                     </div>
 
+                    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+                      <label className="flex items-start gap-3 text-sm text-amber-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={consentimientoAceptado}
+                          onChange={(e) => setConsentimientoAceptado(e.target.checked)}
+                          className="mt-1 h-4 w-4 accent-amber-500"
+                        />
+                        <span>
+                          He leído y acepto el consentimiento informado para la captura de video con rostro visible y la utilización de estos datos para investigación.
+                          <a
+                            href="#consentimiento-documento"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setMostrarModalConsentimiento(true);
+                            }}
+                            className="ml-1 font-medium text-amber-300 underline decoration-amber-500/60 underline-offset-2 hover:text-amber-200"
+                          >
+                            Leer documento de ejemplo
+                          </a>
+                        </span>
+                      </label>
+
+                      {mostrarModalConsentimiento && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+                          <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl shadow-slate-950/60">
+                            <div className="mb-4 flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-400">Consentimiento informado</p>
+                                <h3 className="mt-2 text-xl font-bold text-white">Ejemplo del documento</h3>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setMostrarModalConsentimiento(false)}
+                                className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+                              >
+                                Cerrar
+                              </button>
+                            </div>
+
+                            <div className="space-y-4 text-sm leading-7 text-slate-200">
+                              <p>
+                                Yo, <strong>[Nombre completo del participante]</strong>, con correo electrónico <strong>[correo@ejemplo.com]</strong>, acepto de manera libre, informada y voluntaria participar en la recolección de video con rostro visible para la investigación de reconocimiento de la Lengua de Señas Mexicana (LSM).
+                              </p>
+                              <p>
+                                Entiendo que el material capturado será utilizado exclusivamente con fines de investigación, validación y desarrollo del sistema de reconocimiento. Autorizo la utilización de mi imagen y mi información de contacto para la gestión de la participación, así como para futuras comunicaciones relacionadas con la investigación, siempre que se respeten las condiciones de confidencialidad y protección de datos establecidas por la institución.
+                              </p>
+                              <p>
+                                Comprendo que mi participación es voluntaria y que puedo solicitar la eliminación o rectificación de mis datos en cualquier momento contactando al equipo responsable mediante el correo proporcionado. Declaro que he leído esta información, he entendido sus alcances y acepto participar en el proceso.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {consentimientoAceptado && (
+                        <div className="mt-3 space-y-3">
+                          <input
+                            type="text"
+                            value={nombreParticipante}
+                            onChange={(e) => setNombreParticipante(e.target.value)}
+                            placeholder="Nombre del participante"
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
+                          />
+                          <input
+                            type="email"
+                            value={correoParticipante}
+                            onChange={(e) => setCorreoParticipante(e.target.value)}
+                            placeholder="Correo electrónico"
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
+                          />
+                          {consentimientoId ? (
+                            <div className="text-xs text-emerald-300">Consentimiento registrado con ID: {consentimientoId}</div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={registrarConsentimiento}
+                              disabled={guardandoConsentimiento}
+                              className="w-full rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-60"
+                            >
+                              {guardandoConsentimiento ? 'Guardando consentimiento...' : 'Guardar consentimiento'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-slate-400 mb-1">Ángulo Horizontal</label>
                         <select value={anguloHorizontal} onChange={(e) => setAnguloHorizontal(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
                           <option value="frontal">Frontal (0°)</option>
-                          <option value="lateral_der">Lateral Der (45°)</option>
-                          <option value="lateral_izq">Lateral Izq (-45°)</option>
+                          <option value="lateral_der">Lateral (45°)</option>
                         </select>
                       </div>
                       <div>
@@ -464,14 +662,12 @@ export default function Grabadora () {
                         <select value={anguloVertical} onChange={(e) => setAnguloVertical(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
                           <option value="nivel_ojos">Nivel de los ojos</option>
                           <option value="picado">Picado (Desde arriba)</option>
-                          <option value="contrapicado">Contrapicado (Desde abajo)</option>
                         </select>
                       </div>
                       <div className="col-span-2">
                         <label className="block text-slate-400 mb-1">Distancia al Sujeto</label>
                         <select value={distancia} onChange={(e) => setDistancia(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
                           <option value="plano_medio">Plano Medio (Cintura hacia arriba)</option>
-                          <option value="close_up">Close-up (Pecho hacia arriba)</option>
                         </select>
                       </div>
                     </div>
