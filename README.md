@@ -1,25 +1,29 @@
 # LSM Recolector MVP
 
-Aplicación para capturar, catalogar y visualizar muestras de señas en un dataset de lenguaje de señas mexicano (LSM), usando visión por computadora y una interfaz web para registrar videos y métricas de recolección.
+Aplicación para capturar, catalogar y visualizar muestras de lenguaje de señas mexicano (LSM) con una interfaz web orientada a la recolección de videos y métricas por seña.
 
 ## ¿Qué hace este proyecto?
 
-La app tiene dos partes principales:
+La aplicación permite:
 
-- Backend en FastAPI para gestionar la API y la base de datos PostgreSQL.
-- Frontend en React + Vite para grabar muestras, seleccionar señas y consultar el dashboard de progreso.
+- seleccionar una seña del catálogo,
+- grabar una muestra con la cámara,
+- capturar landmarks y metadata de pose (ángulo horizontal, ángulo vertical y distancia),
+- guardar el video y su registro en PostgreSQL,
+- consultar un dashboard con progreso global y por seña.
 
-El flujo actual es:
+El flujo activo actual es:
 
-1. El usuario selecciona una seña desde la interfaz.
-2. Se graba un video con la cámara.
-3. Se envía al backend junto con metadata de ángulo y distancia.
-4. El backend guarda el archivo y registra la muestra en PostgreSQL.
-5. El dashboard consulta el estado global y por seña.
+1. El usuario abre la pantalla de grabación.
+2. La cámara se activa con MediaPipe Holistic.
+3. El procesamiento se ejecuta en un Web Worker para reducir carga en el hilo principal.
+4. Se envía el video y la metadata al backend.
+5. El backend valida la seña, normaliza el usuario y almacena la muestra.
+6. El dashboard consulta los datos desde PostgreSQL y muestra métricas por categoría y por seña.
 
-## Stack activo
+## Stack real del proyecto
 
-- Python 3.12+
+- Python 3.11+
 - FastAPI
 - SQLAlchemy
 - PostgreSQL
@@ -27,59 +31,71 @@ El flujo actual es:
 - Vite
 - MediaPipe Holistic
 
-## Estructura del proyecto
+## Estructura actual
 
 ```text
 LSM_Recolector_MVP/
 ├── backend/
 │   ├── api/
-│   │   └── main.py                # App FastAPI activa
+│   │   └── main.py                 # API FastAPI activa
 │   ├── database/
-│   │   ├── schema.py              # Modelos y conexión PostgreSQL
-│   ├── dataset/                   # Archivos generados por el sistema
-│   ├── .env                       # Variables de entorno activas
-│   ├── storage_manager.py         # Gestión de archivos de video
+│   │   └── schema.py               # Modelos SQLAlchemy y conexión PostgreSQL
+│   ├── dataset/                    # Archivos generados por la app
+│   ├── .env                        # Variables de entorno activas
+│   ├── main.py                     # Archivo legacy no usado en el flujo principal
+│   ├── storage_manager.py          # Guardado de video y archivos
 │   └── ...
 ├── frontend/
 │   ├── src/
+│   │   ├── pages/
+│   │   │   └── Grabadora.jsx      # Pantalla de captura y subida
+│   │   └── workers/
+│   │       └── holisticWorker.js  # Worker para MediaPipe Holistic
 │   ├── package.json
 │   ├── vite.config.js
 │   └── ...
 ├── setup.bat
 ├── start.bat
+├── docker-compose.yml
 ├── .gitignore
 ├── README.md
-└── Legacy/                       # Archivados fuera del repositorio activo
+└── .env.example (si aplica según entorno local)
 ```
 
 ## Base de datos
 
-La versión activa del proyecto usa PostgreSQL y no SQLite.
+La versión activa del proyecto usa PostgreSQL como base de datos principal.
 
-La conexión se define en `backend/.env` usando la variable:
+La conexión actual se define en `backend/.env` con una variable tipo:
 
 ```env
 DATABASE_URL=postgresql://postgres:admin@localhost:5432/postgres
 ```
 
-La base legacy SQLite se archivó fuera del proyecto y ya no forma parte del flujo activo.
+SQLite y los artefactos legacy quedaron fuera del repositorio activo para evitar conflictos con la app real. La ruta de trabajo actual debe considerar PostgreSQL como la fuente de verdad.
 
-## Requisitos
+## Requisitos previos
 
 - Python instalado
-- PostgreSQL corriendo en localhost:5432
+- PostgreSQL corriendo en `localhost:5432`
 - Node.js y npm
+- Git
 
 ## Arranque rápido
 
-### Backend
+### 1) Preparar el backend
 
 ```powershell
 cd backend
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Frontend
+Si la dependencia no tiene un `requirements.txt`, se puede instalar manualmente según el entorno local usado para FastAPI, SQLAlchemy y psycopg2.
+
+### 2) Iniciar el frontend
 
 ```powershell
 cd frontend
@@ -87,28 +103,53 @@ npm install
 npm run dev -- --host 0.0.0.0
 ```
 
-### Scripts del proyecto
+### 3) Ejecutar scripts del proyecto
 
 ```powershell
 setup.bat
 start.bat
 ```
 
-## Endpoints principales
+## API principal
+
+La API expone en la parte actual estos endpoints:
 
 - `GET /api/senas`
 - `GET /api/dashboard/global`
 - `GET /api/dashboard/sena/{id_sena}`
 - `POST /api/muestras`
 
-Swagger disponible en:
+Documentación automática de Swagger:
 
 - http://localhost:8000/docs
 
+## Dashboard y flujo de captura
+
+El frontend incluye:
+
+- selección de señas,
+- visualización de cámara,
+- detección de puntos clave con MediaPipe Holistic,
+- overlay de landmarks en canvas,
+- captura de video y envío al backend,
+- dashboard con conteo y progreso por categoría/seña.
+
+La lógica de extracción de landmarks se mueve a un Web Worker en:
+
+- `frontend/src/workers/holisticWorker.js`
+
+Esto permite mantener la interfaz más fluida y evitar saturar el hilo principal del navegador.
+
 ## Estado actual
 
-Este proyecto ya no usa la base legacy ni el flujo SQLite. La aplicación real está funcionando con PostgreSQL y la interfaz React consume la API FastAPI activa.
+Este proyecto ya quedó consolidado en una versión funcional con:
 
-## Nota de limpieza
+- backend FastAPI operativo,
+- PostgreSQL como base de datos real,
+- frontend Vite + React para grabación y dashboard,
+- worker de MediaPipe para procesamiento de landmarks,
+- legacy archivado fuera del repositorio activo.
 
-El código legacy y la base SQLite histórica quedaron archivados fuera del proyecto para evitar conflictos y mantener una estructura limpia de producción.
+## Nota de mantenimiento
+
+Si se agregan más módulos o se vuelve a reorganizar la estructura, conviene mantener el flujo activo en `backend/api/main.py` y evitar duplicados que puedan causar conflictos con el runtime principal.
